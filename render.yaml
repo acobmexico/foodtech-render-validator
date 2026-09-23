@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: foodtech-2026-ai-validator
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: APP_ACCESS_KEY
+        sync: false
+      - key: FOODTECH_API_BASE_URL
+        sync: false
+      - key: FOODTECH_API_TOKEN
+        sync: false
+      - key: SCORE_THRESHOLD
+        value: "65"
+      - key: MAX_PARALLEL_CASES
+        value: "5"
+      - key: OPENAI_MODEL
+        value: gpt-5-mini

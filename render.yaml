@@ -22,3 +22,5 @@ services:
         value: "5"
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      - key: AUTO_RUN_ON_START
+        value: "false"

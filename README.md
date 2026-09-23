@@ -7,6 +7,9 @@ No conserva resultados localmente.
 ## Operación
 
 - `POST /api/run-batch`: consulta pendientes y procesa el lote.
+- `POST /api/run-all`: inicia todos los pendientes en segundo plano, en lotes de 10.
+- `GET /api/run-all/status`: devuelve avance, totales y errores recientes.
+- `POST /api/run-all/stop`: se detiene después de terminar el lote actual.
 - `POST /api/process-package`: procesa un arreglo recibido de 1 a 10 registros.
 - `GET /health`: comprueba configuración y estado.
 - `GET /`: interfaz privada para una prueba manual.
@@ -27,6 +30,19 @@ bloqueo distribuido, pues dos instancias podrían consultar los mismos pendiente
 | `SCORE_THRESHOLD` | `65` |
 | `MAX_PARALLEL_CASES` | Comenzar con `5`; máximo permitido por el código: `10` |
 | `OPENAI_MODEL` | `gpt-5-mini` |
+| `AUTO_RUN_ON_START` | `false`: inicio con botón; `true`: reanuda automáticamente al iniciar Render |
+
+## Procesar los 5,000 casos
+
+Abra `/`, capture `APP_ACCESS_KEY` y pulse **Procesar todos los pendientes** una
+sola vez. La página puede cerrarse: el proceso continúa en Render. Cada dictamen
+se guarda de inmediato; si un caso falla, permanece pendiente y aparece entre
+los errores recientes. La corrida avanza el cursor para que un error no provoque
+un ciclo infinito.
+
+Para reanudar automáticamente después de un reinicio o despliegue, cambie
+`AUTO_RUN_ON_START` a `true` en Render. La API solamente devuelve pendientes,
+por lo que no repite los casos que ya se guardaron correctamente.
 
 La URL `localhost` de la documentación no funciona desde Render. Debe configurarse
 el host HTTPS público o una dirección que Render pueda alcanzar por Internet.
@@ -86,8 +102,15 @@ El razonamiento guardado incluye puntaje, clasificación y motivo, por ejemplo:
 
 - Puntaje mayor o igual a `SCORE_THRESHOLD`: `allowed`.
 - Puntaje menor: `banned`.
+- Un medio editorial especializado y demostrablemente enfocado en FOODTECH se
+  clasifica `MEDIO_ESPECIALIZADO` y obtiene al menos 65 puntos. Medios
+  generalistas o de otros sectores no califican por el solo hecho de ser medios.
 - Sitio vacío, inválido, red social o inaccesible: puntaje 0 por falta de evidencia
   verificable y `banned`.
+- El crawler nunca consulta resultados de Google, Bing o Yahoo. Si recibe un
+  enlace de salida de Google, extrae localmente la URL empresarial y se conecta
+  directamente. Las páginas de búsqueda se rechazan antes de solicitarse para
+  evitar CAPTCHA y bloqueos de IP.
 - Error técnico de OpenAI: no se llama `saveAIValidation`.
 - Error al guardar: se devuelve `save_error` y nunca se asume que quedó validado.
 - `saveAIValidation` no se reintenta automáticamente para evitar snapshots

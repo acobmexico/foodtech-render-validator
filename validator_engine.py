@@ -6,7 +6,7 @@ import threading
 import unicodedata
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urldefrag
 
 import requests
 from bs4 import BeautifulSoup
@@ -25,6 +25,11 @@ USER_AGENT = "Mozilla/5.0 (compatible; FoodtechQualification/3.0; +Render)"
 SOCIAL_HOSTS = {
     "facebook.com", "instagram.com", "linkedin.com", "tiktok.com",
     "x.com", "twitter.com", "youtube.com",
+}
+
+SEARCH_ENGINE_HOSTS = {
+    "google.com", "google.com.mx", "googleusercontent.com",
+    "bing.com", "search.yahoo.com",
 }
 
 GIROS_REFERENCIA = """
@@ -47,11 +52,13 @@ y empaque para la industria de alimentos y bebidas.
 Evalúa exclusivamente el GIRO Y LA ACTIVIDAD ACTUAL DE LA EMPRESA. Ignora por
 completo puestos, cargos, áreas, autoridad individual o departamentos.
 
-Determina qué tan natural y probable es que la empresa compre o distribuya
-actualmente ingredientes, aditivos, materias primas alimenticias, productos para
-transformación, sabores, colores, esencias, fragancias, maquinaria, tecnología,
-equipos, conservación, envases, empaques, etiquetas, control, laboratorio,
-calidad o servicios directamente relacionados con procesamiento y empaque.
+Determina si la empresa participa profesionalmente en el ecosistema FOODTECH. La
+vía principal es comprar, fabricar, transformar, integrar, representar o
+distribuir ingredientes, insumos, maquinaria, tecnología, envases o servicios
+relacionados. Existe además una vía válida e independiente: ser un MEDIO
+ESPECIALIZADO cuya actividad editorial demostrada se concentre en la industria
+de alimentos y bebidas o en su cadena de ingredientes, procesamiento, empaque,
+calidad y tecnología.
 
 GIROS ORIENTATIVOS NO LIMITATIVOS:
 {GIROS_REFERENCIA}
@@ -61,7 +68,8 @@ REGLAS OBLIGATORIAS:
    página corporativa enlazada desde ella.
 2. No uses conocimiento externo, memoria, directorios ni información no incluida.
 3. No supongas actividades que las páginas no demuestren.
-4. Clasifica como COMPRADOR, DISTRIBUIDOR, AMBOS o NO_CALIFICA.
+4. Clasifica como COMPRADOR, DISTRIBUIDOR, AMBOS, MEDIO_ESPECIALIZADO o
+   NO_CALIFICA.
 5. COMPRADOR necesita adquirir naturalmente soluciones objetivo por su operación.
 6. DISTRIBUIDOR comercializa, importa, representa, distribuye o integra soluciones
    relevantes para alimentos y bebidas.
@@ -71,20 +79,45 @@ REGLAS OBLIGATORIAS:
 9. Fabricantes, procesadores, empacadores, cadenas de restaurantes, cadenas
    hoteleras con operación alimentaria, comedores industriales, importadores,
    mayoristas y distribuidores especializados pueden obtener calificación alta.
-10. Universidades, asociaciones, consultores, medios, gobierno, despachos,
-    escuelas y servicios generales deben recibir calificación baja salvo evidencia
-    directa de compra o distribución.
-11. Si no existe evidencia suficiente del giro, asigna una calificación baja o 0.
-12. Escala estricta: 100 inequívoco; 80-99 relación sólida; 60-79 relevante pero
+10. MEDIO ESPECIALIZADO: aprueba un medio editorial, revista, portal de noticias,
+    publicación, directorio sectorial o plataforma de contenido cuando las páginas
+    demuestren que su enfoque editorial y su audiencia profesional pertenecen
+    específicamente a alimentos y bebidas, ingredientes, procesamiento, empaque,
+    inocuidad, calidad o tecnología alimentaria. No es necesario que compre,
+    fabrique o distribuya productos. Asígnale al menos 65 puntos cuando la
+    especialización FOODTECH esté demostrada y clasifícalo MEDIO_ESPECIALIZADO.
+11. No apruebes un medio solamente por publicar una nota aislada de alimentos.
+    Debe existir evidencia de especialización editorial recurrente o de que su
+    directorio, noticias, capacitación o contenido están dirigidos al sector.
+12. Rechaza medios generalistas y medios especializados en industrias ajenas,
+    por ejemplo automotriz, construcción, moda o entretenimiento, aunque sean
+    medios editoriales. Clasifícalos NO_CALIFICA salvo que exista en las páginas
+    una división FOODTECH clara, actual y sustancial.
+13. Universidades, asociaciones, consultores, gobierno, despachos, escuelas y
+    servicios generales deben recibir calificación baja salvo evidencia directa
+    de compra, distribución o una actividad sectorial expresamente admitida.
+14. Si no existe evidencia suficiente del giro, asigna una calificación baja o 0.
+15. Escala estricta: 100 inequívoco; 80-99 relación sólida; 60-79 relevante pero
     parcial; 30-59 secundaria; 1-29 débil; 0 sin evidencia suficiente.
-13. La razón debe estar en español y contener como máximo 50 palabras.
-14. No menciones puestos ni sugieras que faltó conocerlos.
+16. Para un medio FOODTECH inequívoco usa normalmente 70-90 puntos. Reserva
+    65-69 para especialización válida pero con evidencia limitada.
+17. La razón debe estar en español y contener como máximo 50 palabras.
+18. No menciones puestos ni sugieras que faltó conocerlos.
+
+EJEMPLOS DE DECISIÓN:
+- Revista o portal con directorio, noticias y capacitación para profesionales de
+  alimentos, ingredientes o procesamiento: MEDIO_ESPECIALIZADO y aprobado.
+- Revista automotriz sin una división alimentaria demostrada: NO_CALIFICA.
+- Portal general de noticias que ocasionalmente publica sobre comida: NO_CALIFICA.
 """.strip()
 
 
 class CompanyEvaluation(BaseModel):
     score: int = Field(ge=0, le=100)
-    type: Literal["COMPRADOR", "DISTRIBUIDOR", "AMBOS", "NO_CALIFICA"]
+    type: Literal[
+        "COMPRADOR", "DISTRIBUIDOR", "AMBOS", "MEDIO_ESPECIALIZADO",
+        "NO_CALIFICA",
+    ]
     detected_business: str
     evidence: str
     reason: str
@@ -120,6 +153,7 @@ def normalize_url(url: str) -> str:
         raise ValueError("La empresa no proporcionó página web.")
     if not re.match(r"^https?://", url, flags=re.I):
         url = "https://" + url
+    url = unwrap_search_redirect(url)
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("La URL no es válida.")
@@ -128,6 +162,34 @@ def normalize_url(url: str) -> str:
     if parsed.port not in {None, 80, 443}:
         raise ValueError("El puerto de la URL no está permitido.")
     return url
+
+
+def is_search_engine_host(host: str) -> bool:
+    normalized = (host or "").casefold().rstrip(".")
+    normalized = normalized[4:] if normalized.startswith("www.") else normalized
+    return any(
+        normalized == item or normalized.endswith("." + item)
+        for item in SEARCH_ENGINE_HOSTS
+    )
+
+
+def unwrap_search_redirect(url: str) -> str:
+    """Extrae el destino de enlaces de salida sin consultar al buscador."""
+    parsed = urlparse(url)
+    if not is_search_engine_host(parsed.hostname or ""):
+        return url
+    query = parse_qs(parsed.query)
+    candidates = query.get("q", []) + query.get("url", []) + query.get("u", [])
+    for candidate in candidates:
+        destination = unquote(candidate).strip()
+        if re.match(r"^https?://", destination, flags=re.I):
+            target = urlparse(destination)
+            if target.hostname and not is_search_engine_host(target.hostname):
+                return destination
+    raise ValueError(
+        "Se recibió una página de búsqueda de Google/Bing en lugar del sitio "
+        "directo de la empresa. No se consulta al buscador para evitar CAPTCHA."
+    )
 
 
 def normalized_domain(url: str) -> str:
@@ -165,6 +227,11 @@ def download_html(url: str) -> tuple[str, str]:
         raise ValueError("La URL corresponde a una red social no procesable.")
     session = requests.Session()
     for _ in range(MAX_REDIRECTS + 1):
+        if is_search_engine_host(urlparse(current).hostname or ""):
+            raise ValueError(
+                "El sitio redirigió a un buscador; se bloqueó la solicitud para "
+                "evitar rate-limiting y CAPTCHA."
+            )
         if is_social_url(current):
             raise ValueError("La URL redirigió a una red social no procesable.")
         reject_private_destination(current)

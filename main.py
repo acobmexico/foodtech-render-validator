@@ -5,9 +5,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from foodtech_api import FoodtechAPIClient, FoodtechAPIError
+from excel_results import append_analysis_result, build_excel, result_count
 from validator_engine import evaluate_record
 
 
@@ -59,6 +61,13 @@ def api_client() -> FoodtechAPIClient:
     return FoodtechAPIClient(API_BASE_URL, API_TOKEN)
 
 
+def append_excel_safely(result: dict, record: dict) -> None:
+    try:
+        append_analysis_result(result, record)
+    except Exception as exc:
+        result["excel_error"] = f"{type(exc).__name__}: {exc}"
+
+
 def process_one(record: dict) -> dict:
     started = time.perf_counter()
     enrollment = str(record.get("enrollmentCode") or "").strip()
@@ -74,12 +83,14 @@ def process_one(record: dict) -> dict:
     try:
         evaluation = evaluate_record(record, SCORE_THRESHOLD)
     except Exception as exc:
-        return {
+        result = {
             **base,
             "status": "evaluation_error",
             "error": f"{type(exc).__name__}: {exc}",
             "elapsed_seconds": round(time.perf_counter() - started, 2),
         }
+        append_excel_safely(result, record)
+        return result
 
     try:
         endpoint_reason = (
@@ -93,15 +104,17 @@ def process_one(record: dict) -> dict:
             endpoint_reason,
         )
     except Exception as exc:
-        return {
+        result = {
             **base,
             "status": "save_error",
             "evaluation": evaluation,
             "error": f"{type(exc).__name__}: {exc}",
             "elapsed_seconds": round(time.perf_counter() - started, 2),
         }
+        append_excel_safely(result, record)
+        return result
 
-    return {
+    result = {
         **base,
         "status": "saved",
         "evaluation": evaluation,
@@ -109,6 +122,8 @@ def process_one(record: dict) -> dict:
         "save_response": saved,
         "elapsed_seconds": round(time.perf_counter() - started, 2),
     }
+    append_excel_safely(result, record)
+    return result
 
 
 def process_records(records: list[dict]) -> dict:
@@ -177,6 +192,7 @@ def continuous_worker(batch_size: int, after_id: int):
             pending = api_client().consult_pending(batch_size, cursor)
             records = pending.get("data") or []
             if not records:
+                build_excel()
                 update_job(
                     status="completed",
                     finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -212,7 +228,13 @@ def continuous_worker(batch_size: int, after_id: int):
             finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             elapsed_seconds=round(time.perf_counter() - started, 2),
         )
+        build_excel()
     except Exception as exc:
+        try:
+            if result_count():
+                build_excel()
+        except Exception:
+            pass
         update_job(
             status="failed",
             finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -262,7 +284,22 @@ def health():
         "batch_running": batch_lock.locked(),
         "continuous_job": job_snapshot()["status"],
         "auto_run_on_start": AUTO_RUN_ON_START,
+        "excel_rows": result_count(),
     }
+
+
+@app.get("/api/results.xlsx")
+def download_results(x_api_key: str | None = Header(default=None)):
+    require_access_key(x_api_key)
+    try:
+        path = build_excel()
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(
+        path=str(path),
+        filename="FOODTECH_VALIDACION_RESULTADOS.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.post("/api/run-all")
@@ -346,6 +383,7 @@ body{margin:0;background:#eef3f0;font-family:Arial,sans-serif;color:#17221b}main
 <body><main><section class="card"><h1>FOODTECH 2026 AI Validator</h1><p>Procesa todos los pendientes automáticamente, en bloques de diez y con guardado individual.</p>
 <label>Clave de acceso</label><input id="key" type="password" placeholder="APP_ACCESS_KEY">
 <button id="all" onclick="runAll()">Procesar todos los pendientes</button> <button id="stop" onclick="stopAll()" style="background:#9b2c2c">Detener</button>
+<button id="download" onclick="downloadExcel()" style="background:#245a9b">Descargar Excel</button>
 <div id="allstatus" class="summary"></div>
 <hr style="margin:24px 0;border:0;border-top:1px solid #d6dfd9"><p><strong>Prueba o ejecución manual de un lote</strong></p>
 <label>Número de casos</label><input id="count" type="number" min="1" max="10" value="10">
@@ -357,6 +395,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const headers=()=>({'Content-Type':'application/json','X-API-Key':document.getElementById('key').value});
 async function runAll(){try{const r=await fetch('/api/run-all',{method:'POST',headers:headers(),body:JSON.stringify({batch_size:10,after_id:0})});const d=await r.json();if(!r.ok)throw new Error(d.detail||JSON.stringify(d));renderAll(d);pollAll()}catch(e){alert(e.message)}}
 async function stopAll(){try{const r=await fetch('/api/run-all/stop',{method:'POST',headers:headers()});const d=await r.json();if(!r.ok)throw new Error(d.detail||JSON.stringify(d));renderAll(d)}catch(e){alert(e.message)}}
+async function downloadExcel(){try{const r=await fetch('/api/results.xlsx',{headers:headers()});if(!r.ok){let d;try{d=await r.json()}catch(_){d={detail:await r.text()}}throw new Error(d.detail||'No fue posible generar el Excel')}const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='FOODTECH_VALIDACION_RESULTADOS.xlsx';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)}catch(e){alert(e.message)}}
 function renderAll(d){document.getElementById('allstatus').innerHTML=`<span class="pill">Estado: ${esc(d.status)}</span><span class="pill">Procesados: ${esc(d.records_received)}</span><span class="pill">Guardados: ${esc(d.records_saved)}</span><span class="pill">Aprobados: ${esc(d.allowed)}</span><span class="pill">Rechazados: ${esc(d.banned)}</span><span class="pill">Errores: ${esc(d.errors)}</span><span class="pill">Lotes: ${esc(d.batches)}</span><span class="pill">Tiempo: ${esc(d.elapsed_seconds)} s</span>${d.last_error?`<span class="error">${esc(d.last_error)}</span>`:''}`}
 async function pollAll(){try{const r=await fetch('/api/run-all/status',{headers:headers()});const d=await r.json();if(!r.ok)throw new Error(d.detail||JSON.stringify(d));renderAll(d);if(['running','starting'].includes(d.status))setTimeout(pollAll,5000)}catch(e){document.getElementById('allstatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}}
 async function runBatch(){const button=document.getElementById('run'),status=document.getElementById('status'),error=document.getElementById('error'),result=document.getElementById('result');error.style.display='none';result.style.display='none';button.disabled=true;status.textContent='Consultando y analizando el lote. No cierre esta página...';try{const response=await fetch('/api/run-batch',{method:'POST',headers:{'Content-Type':'application/json','X-API-Key':document.getElementById('key').value},body:JSON.stringify({max_records:Number(document.getElementById('count').value),after_id:Number(document.getElementById('after').value)})});const raw=await response.text();let data;try{data=JSON.parse(raw)}catch(_){throw new Error(`HTTP ${response.status}: ${raw.slice(0,500)}`)}if(!response.ok)throw new Error(data.detail||JSON.stringify(data));document.getElementById('summary').innerHTML=`<span class="pill">Recibidos: ${data.records_received}</span><span class="pill">Guardados: ${data.records_saved??0}</span><span class="pill">Aprobados: ${data.allowed??0}</span><span class="pill">Rechazados: ${data.banned??0}</span><span class="pill">Errores: ${data.errors??0}</span><span class="pill">Tiempo: ${data.elapsed_seconds??0} s</span>`;document.getElementById('rows').innerHTML=(data.results||[]).map(x=>`<tr><td>${esc(x.identity)}</td><td>${esc(x.RazonSocial)}</td><td>${esc(x.status)}</td><td>${esc(x.evaluation?.score)}</td><td>${esc(x.evaluation?.decision)}</td><td>${esc(x.evaluation?.reason||x.error)}</td><td>${esc(x.elapsed_seconds)}</td></tr>`).join('');document.getElementById('json').textContent=JSON.stringify(data,null,2);result.style.display='block';status.textContent='Lote terminado.'}catch(e){error.textContent=e.message;error.style.display='block';status.textContent=''}finally{button.disabled=false}}

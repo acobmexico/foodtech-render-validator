@@ -10,6 +10,7 @@ No conserva resultados localmente.
 - `POST /api/run-all`: inicia todos los pendientes en segundo plano, en lotes de 10.
 - `GET /api/run-all/status`: devuelve avance, totales y errores recientes.
 - `POST /api/run-all/stop`: se detiene después de terminar el lote actual.
+- `GET /api/results.xlsx`: genera y descarga el Excel acumulado.
 - `POST /api/process-package`: procesa un arreglo recibido de 1 a 10 registros.
 - `GET /health`: comprueba configuración y estado.
 - `GET /`: interfaz privada para una prueba manual.
@@ -31,6 +32,21 @@ bloqueo distribuido, pues dos instancias podrían consultar los mismos pendiente
 | `MAX_PARALLEL_CASES` | Comenzar con `5`; máximo permitido por el código: `10` |
 | `OPENAI_MODEL` | `gpt-5-mini` |
 | `AUTO_RUN_ON_START` | `false`: inicio con botón; `true`: reanuda automáticamente al iniciar Render |
+| `RESULTS_CSV_PATH` | Registro incremental; por defecto `/tmp/FOODTECH_VALIDACION_RESULTADOS.csv` |
+| `RESULTS_XLSX_PATH` | Excel descargable; por defecto `/tmp/FOODTECH_VALIDACION_RESULTADOS.xlsx` |
+
+## Archivo Excel
+
+Cada intento se agrega inmediatamente al registro incremental. El botón
+**Descargar Excel** genera `FOODTECH_VALIDACION_RESULTADOS.xlsx` con empresa,
+identificadores, sitio, estado, puntaje, tipo, decisión, giro, evidencia,
+razonamiento, URLs analizadas, errores, tiempo y modelo. El libro incluye filtros,
+encabezado fijo, ajuste de texto y limpieza de caracteres ilegales.
+
+`/tmp` es almacenamiento temporal de Render. Para conservar el historial después
+de reinicios, monte un Persistent Disk en `/var/data` y cambie las dos variables
+a `/var/data/FOODTECH_VALIDACION_RESULTADOS.csv` y
+`/var/data/FOODTECH_VALIDACION_RESULTADOS.xlsx`.
 
 ## Procesar los 5,000 casos
 

@@ -24,3 +24,7 @@ services:
         value: gpt-5-mini
       - key: AUTO_RUN_ON_START
         value: "false"
+      - key: RESULTS_CSV_PATH
+        value: /tmp/FOODTECH_VALIDACION_RESULTADOS.csv
+      - key: RESULTS_XLSX_PATH
+        value: /tmp/FOODTECH_VALIDACION_RESULTADOS.xlsx

@@ -20,7 +20,8 @@ HEADERS = [
     "PAGINA_WEB", "ESTADO_PROCESO", "PUNTAJE", "TIPO", "DECISION",
     "GIRO_DETECTADO", "EVIDENCIA", "RAZONAMIENTO", "URL_PRINCIPAL",
     "URL_CORPORATIVA", "ERROR_WEB", "ERROR_PROCESO", "TIEMPO_SEGUNDOS",
-    "MODELO",
+    "MODELO", "METODO_OBTENCION", "CACHE_UTILIZADO", "INTENTOS_RECUPERACION",
+    "FUENTES_BUSQUEDA",
 ]
 
 
@@ -46,14 +47,41 @@ def result_row(result: dict, source_record: dict) -> list[str]:
         evaluation.get("reason", ""), evaluation.get("main_url", ""),
         evaluation.get("corporate_url", ""), evaluation.get("web_error", ""),
         result.get("error", ""), result.get("elapsed_seconds", ""),
-        evaluation.get("model", ""),
+        evaluation.get("model", ""), evaluation.get("retrieval_method", ""),
+        "SI" if evaluation.get("cache_hit") else "NO",
+        evaluation.get("retrieval_attempts", ""),
+        " | ".join(evaluation.get("search_sources") or []),
     ]]
+
+
+def _ensure_current_schema() -> None:
+    if not CSV_PATH.exists() or CSV_PATH.stat().st_size == 0:
+        return
+    with CSV_PATH.open("r", newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.reader(handle))
+    if not rows or rows[0] == HEADERS:
+        return
+    old_headers = rows[0]
+    positions = {name: index for index, name in enumerate(old_headers)}
+    temporary = CSV_PATH.with_suffix(".migration.tmp")
+    with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(HEADERS)
+        for old_row in rows[1:]:
+            writer.writerow([
+                old_row[positions[name]] if name in positions and positions[name] < len(old_row) else ""
+                for name in HEADERS
+            ])
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, CSV_PATH)
 
 
 def append_analysis_result(result: dict, source_record: dict) -> None:
     row = result_row(result, source_record)
     with _lock:
         CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_current_schema()
         new_file = not CSV_PATH.exists() or CSV_PATH.stat().st_size == 0
         with CSV_PATH.open("a", newline="", encoding="utf-8-sig") as handle:
             writer = csv.writer(handle)
@@ -94,6 +122,7 @@ def build_excel() -> Path:
             1: 25, 2: 12, 3: 20, 4: 20, 5: 38, 6: 42, 7: 20,
             8: 11, 9: 24, 10: 14, 11: 40, 12: 55, 13: 55,
             14: 42, 15: 42, 16: 45, 17: 45, 18: 17, 19: 18,
+            20: 20, 21: 16, 22: 65, 23: 65,
         }
         for index, width in widths.items():
             sheet.column_dimensions[get_column_letter(index)].width = width

@@ -22,9 +22,15 @@ services:
         value: "5"
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      - key: OPENAI_SEARCH_MODEL
+        value: gpt-5-mini
+      - key: WEB_REQUEST_TIMEOUT
+        value: "35"
       - key: AUTO_RUN_ON_START
         value: "false"
       - key: RESULTS_CSV_PATH
         value: /tmp/FOODTECH_VALIDACION_RESULTADOS.csv
       - key: RESULTS_XLSX_PATH
         value: /tmp/FOODTECH_VALIDACION_RESULTADOS.xlsx
+      - key: ANALYSIS_CACHE_PATH
+        value: /tmp/foodtech_analysis_cache.sqlite3

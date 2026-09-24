@@ -2,7 +2,8 @@
 
 Servicio que consulta hasta diez pases pendientes, evalúa en paralelo el giro de
 cada empresa y guarda individualmente el dictamen mediante `saveAIValidation`.
-No conserva resultados localmente.
+Mantiene un registro incremental, un Excel descargable y una caché de análisis
+concluyentes.
 
 ## Operación
 
@@ -31,9 +32,37 @@ bloqueo distribuido, pues dos instancias podrían consultar los mismos pendiente
 | `SCORE_THRESHOLD` | `65` |
 | `MAX_PARALLEL_CASES` | Comenzar con `5`; máximo permitido por el código: `10` |
 | `OPENAI_MODEL` | `gpt-5-mini` |
+| `OPENAI_SEARCH_MODEL` | Modelo de la tercera ruta de recuperación web |
+| `WEB_REQUEST_TIMEOUT` | `35` segundos por solicitud directa |
 | `AUTO_RUN_ON_START` | `false`: inicio con botón; `true`: reanuda automáticamente al iniciar Render |
 | `RESULTS_CSV_PATH` | Registro incremental; por defecto `/tmp/FOODTECH_VALIDACION_RESULTADOS.csv` |
 | `RESULTS_XLSX_PATH` | Excel descargable; por defecto `/tmp/FOODTECH_VALIDACION_RESULTADOS.xlsx` |
+| `ANALYSIS_CACHE_PATH` | Caché SQLite de evaluaciones concluyentes |
+
+## Recuperación del sitio y reglas internacionales
+
+El sistema utiliza como máximo tres caminos antes de declarar que no obtuvo
+evidencia: (1) acceso directo con correcciones conservadoras y variantes
+`www`/protocolo; (2) lector alternativo para bloqueos 403, sitios lentos o
+contenido dinámico; y (3) búsqueda web asistida mediante OpenAI. Nunca raspa
+páginas de resultados de Google, por lo que evita CAPTCHA y rate-limiting.
+
+Errores evidentes como `www.bactersanmx,con` se corrigen a
+`www.bactersanmx.com`. La evaluación comprende contenido en cualquier idioma.
+Si no se proporcionó sitio, el razonamiento guardado es exactamente
+`NO SE PROPORCIONO WEBSITE` y no se intenta descubrir uno por nombre.
+
+Con evidencia clara también pueden aprobarse medios FOODTECH, capacitación
+agroalimentaria especializada, embajadas y representaciones comerciales
+internacionales, servicios de calidad o inocuidad alimentaria, empresas de
+empaque y cadenas de restaurantes.
+
+## Caché concluyente
+
+Las evaluaciones con evidencia suficiente se guardan por dominio y empresa en
+SQLite. Una coincidencia posterior reutiliza la evaluación y evita el crawling y
+la llamada de análisis. Los casos sin sitio, inaccesibles o sin evidencia nunca se
+guardan en caché y pueden reintentarse.
 
 ## Archivo Excel
 
@@ -46,7 +75,8 @@ encabezado fijo, ajuste de texto y limpieza de caracteres ilegales.
 `/tmp` es almacenamiento temporal de Render. Para conservar el historial después
 de reinicios, monte un Persistent Disk en `/var/data` y cambie las dos variables
 a `/var/data/FOODTECH_VALIDACION_RESULTADOS.csv` y
-`/var/data/FOODTECH_VALIDACION_RESULTADOS.xlsx`.
+`/var/data/FOODTECH_VALIDACION_RESULTADOS.xlsx`. Configure también
+`ANALYSIS_CACHE_PATH=/var/data/foodtech_analysis_cache.sqlite3`.
 
 ## Procesar los 5,000 casos
 
@@ -121,12 +151,11 @@ El razonamiento guardado incluye puntaje, clasificación y motivo, por ejemplo:
 - Un medio editorial especializado y demostrablemente enfocado en FOODTECH se
   clasifica `MEDIO_ESPECIALIZADO` y obtiene al menos 65 puntos. Medios
   generalistas o de otros sectores no califican por el solo hecho de ser medios.
-- Sitio vacío, inválido, red social o inaccesible: puntaje 0 por falta de evidencia
-  verificable y `banned`.
-- El crawler nunca consulta resultados de Google, Bing o Yahoo. Si recibe un
-  enlace de salida de Google, extrae localmente la URL empresarial y se conecta
-  directamente. Las páginas de búsqueda se rechazan antes de solicitarse para
-  evitar CAPTCHA y bloqueos de IP.
+- Si los tres caminos de recuperación terminan sin evidencia verificable, el
+  registro recibe puntaje 0 y queda fuera de la caché para permitir reintentos.
+- El crawler nunca raspa directamente resultados de Google, Bing o Yahoo. La
+  tercera ruta utiliza la herramienta de búsqueda web de OpenAI y evita CAPTCHA
+  y bloqueos contra la IP de Render.
 - Error técnico de OpenAI: no se llama `saveAIValidation`.
 - Error al guardar: se devuelve `save_error` y nunca se asume que quedó validado.
 - `saveAIValidation` no se reintenta automáticamente para evitar snapshots

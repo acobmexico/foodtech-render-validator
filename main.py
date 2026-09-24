@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from foodtech_api import FoodtechAPIClient, FoodtechAPIError
 from excel_results import append_analysis_result, build_excel, result_count
+from analysis_cache import cache_stats
 from validator_engine import evaluate_record
 
 
@@ -93,10 +94,13 @@ def process_one(record: dict) -> dict:
         return result
 
     try:
-        endpoint_reason = (
-            f"{evaluation['score']}/100; {evaluation['type']}; "
-            f"{evaluation['reason']}"
-        )[:250]
+        if evaluation["reason"] == "NO SE PROPORCIONO WEBSITE":
+            endpoint_reason = "NO SE PROPORCIONO WEBSITE"
+        else:
+            endpoint_reason = (
+                f"{evaluation['score']}/100; {evaluation['type']}; "
+                f"{evaluation['reason']}"
+            )[:250]
         saved = api_client().save_validation(
             enrollment,
             visitor_id,
@@ -285,6 +289,7 @@ def health():
         "continuous_job": job_snapshot()["status"],
         "auto_run_on_start": AUTO_RUN_ON_START,
         "excel_rows": result_count(),
+        "analysis_cache": cache_stats(),
     }
 
 
